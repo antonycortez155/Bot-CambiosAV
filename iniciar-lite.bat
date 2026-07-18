@@ -1,0 +1,5 @@
+@echo off
+cd /d "%~dp0"
+echo Iniciando Cambios AV Lite...
+node --max-old-space-size=384 --expose-gc index.js
+pause
