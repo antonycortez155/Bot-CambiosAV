@@ -352,6 +352,8 @@ async function iniciarBot() {
       updatesLog: false,
       disableWelcome: true,
       waitForLogin: true,
+      // false = no fijar versión local (evita "Version not available..." y usa WA Web actual)
+      whatsappVersion: false,
       // Silencia spam debug de WPPConnect (onAnyMessage, etc.)
       logger: winston.createLogger({
         level: 'error',
