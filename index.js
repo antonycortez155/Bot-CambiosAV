@@ -26,7 +26,6 @@ const {
   limpiarFlujo,
   limpiarFlujosExpirados,
   manejarReanudacion,
-  ESTADOS_FLUJO,
 } = require('./recuperacionFlujo');
 const { manejarIntencionCliente } = require('./intenciones');
 const { manejarComandos } = require('./comandos');
@@ -37,14 +36,14 @@ const { subirComprobante } = require('./comprobantesStorage');
 const { formatearMoneda, esChatPrivado, validarBufferImagen, capitalizar } = require('./utils');
 const { ESTADOS_FLUJO_ENVIO } = require('./constantesEnvio');
 const { manejarFlujoEnvio } = require('./flujoEnvio');
-const { envolverCliente, fueEnvioBot, limpiarEnviosRecientes } = require('./botEnvio');
+const { envolverCliente, limpiarEnviosRecientes } = require('./botEnvio');
 const {
   cargarFlujosActivos,
   marcarAtencionManual,
   limpiarFlujoPersistido,
   sincronizarEstadoCliente,
-  fueAtendidoManual,
   estaPausado,
+  limpiarPausasExpiradas,
 } = require('./persistenciaFlujo');
 const {
   extraerTextoRespuesta,
@@ -52,7 +51,7 @@ const {
   debeProcesarIntenciones,
   ESTADOS_SOLO_CONFIRMACION,
 } = require('./contextoMensaje');
-const { esCancelarFlujo, esSi, esNo } = require('./confirmaciones');
+const { esCancelarFlujo } = require('./confirmaciones');
 const {
   detectarHandoff,
   activarHandoff,
@@ -185,9 +184,7 @@ function esErrorArranqueRecuperable(error) {
 
 function limpiarMemoriaExpirada() {
   const ahora = Date.now();
-  Object.keys(clientesPausados).forEach((id) => {
-    if (clientesPausados[id] <= ahora) delete clientesPausados[id];
-  });
+  limpiarPausasExpiradas(clientesPausados);
   for (const [key, ts] of mensajesProcesados) {
     if (ahora - ts > TTL_MENSAJE_MS) mensajesProcesados.delete(key);
   }
@@ -219,24 +216,6 @@ function cancelarTimersEncuesta() {
 }
 
 setInterval(limpiarMemoriaExpirada, 300000);
-
-async function manejarIntervencionManual(chatId) {
-  const estado = estadoCliente[chatId];
-  if (estado === 'esperando_comprobante') {
-    console.log(`[MANUAL] Admin envió datos de pago a ${chatId} — el bot sigue activo para el comprobante.`);
-    return;
-  }
-
-  const teniaFlujo = ESTADOS_FLUJO.has(estado) || datosEnvio[chatId];
-  if (!teniaFlujo) return;
-
-  delete estadoCliente[chatId];
-  delete datosEnvio[chatId];
-  limpiarFlujo(chatId);
-  cancelarRecordatorio(chatId);
-  await marcarAtencionManual(supabase, chatId, clientesPausados);
-  console.log(`[MANUAL] Cliente ${chatId} atendido manualmente — flujo limpiado y bot pausado 30 min.`);
-}
 
 function habilitarEscuchadorRealtime(client) {
   console.log('📡 Escuchando cambios en transacciones desde la nube...');
@@ -578,6 +557,7 @@ async function procesarMensajeEntrante(client, message) {
   const texto = extraerTextoRespuesta(message);
 
   const siNoCorto = /^(si|sí|no|n|yes|nop|nope)$/i.test((texto || '').trim());
+  // Priorizar reanudación ante SÍ/NO, sin hijackear "sí/no" sueltos sin flujo
   if (estadoCliente[clienteId] === 'esperando_reanudacion' || siNoCorto) {
     const reanudoEarly = await manejarReanudacion(
       client, chatId, clienteId, texto, estadoCliente, datosEnvio,
@@ -586,18 +566,6 @@ async function procesarMensajeEntrante(client, message) {
     if (reanudoEarly !== false) {
       resetearIntentos(clienteId);
       return;
-    }
-    if (!estadoCliente[clienteId] && siNoCorto) {
-      limpiarFlujo(clienteId);
-      delete datosEnvio[clienteId];
-      await limpiarFlujoPersistido(supabase, clienteId).catch(() => {});
-      resetearIntentos(clienteId);
-      return client.sendText(
-        chatId,
-        esNo(texto)
-          ? '✅ Listo, no hay ningún envío pendiente.\n\nEscribe *"quiero enviar"* o cuéntame tu cotización cuando quieras.'
-          : 'ℹ️ Ahora mismo no tengo un envío pendiente para continuar.\n\nEscribe *"quiero enviar"* para empezar.'
-      );
     }
   }
 
@@ -611,7 +579,7 @@ async function procesarMensajeEntrante(client, message) {
   }
 
   if (texto === 'stop' || texto === 'alto') {
-    clientesPausados[clienteId] = Date.now() + PAUSA_USUARIO_MS;
+    await marcarAtencionManual(supabase, clienteId, clientesPausados, PAUSA_USUARIO_MS);
     return client.sendText(
       chatId,
       '📴 *BOT DESACTIVADO*\n\nHas pausado mis respuestas por 1 hora. No te responderé durante este tiempo a menos que un administrador me reactive. ¡Hasta luego! 👋'
@@ -651,10 +619,6 @@ async function procesarMensajeEntrante(client, message) {
     await limpiarFlujoPersistido(supabase, clienteId);
     resetearIntentos(clienteId);
     return client.sendText(chatId, '✨ ¡Tu opinión ha sido registrada! Gracias por ayudarnos a mejorar.');
-  }
-
-  if (fueAtendidoManual(clienteId, clientesPausados)) {
-    return;
   }
 
   if (esCancelarFlujo(texto)) {
@@ -744,12 +708,9 @@ async function procesarMensajeEntrante(client, message) {
     }
   }
 
-  const enAtencionManual = fueAtendidoManual(clienteId, clientesPausados);
-
   const flujoCtx = {
     client, message, chatId, clienteId, texto, estadoCliente, datosEnvio, supabase,
     guardarSnapshot, limpiarFlujo, limpiarFlujoPersistido, programarRecordatorio,
-    silencioso: enAtencionManual,
   };
 
   const flujoAtendido = await manejarFlujoEnvio(flujoCtx);
@@ -787,13 +748,10 @@ function start(client) {
     if (message.from === 'status@broadcast' || message.isBroadcast) return;
     if (message.isGroupMsg) return;
 
-    if (message.fromMe) {
-      const chatId = message.to || message.chatId;
-      if (chatId && esChatPrivado(chatId) && !fueEnvioBot(chatId)) {
-        encolar(chatId, () => manejarIntervencionManual(chatId));
-      }
-      return;
-    }
+    // fromMe = mensajes salientes (bot o admin). No pausar automáticamente:
+    // WhatsApp a veces entrega el ack tarde y se confundía con intervención manual.
+    // Pausar solo con !stop o handoff explícito ("hablar con asesor").
+    if (message.fromMe) return;
 
     if (!esChatPrivado(message.from)) return;
 

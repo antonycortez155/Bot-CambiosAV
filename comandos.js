@@ -1,11 +1,11 @@
 const { supabase, dbQuery } = require('./supabase');
 const { cancelarRecordatorio } = require('./recordatorioComprobante');
 const { limpiarFlujo } = require('./recuperacionFlujo');
-const { limpiarFlujoPersistido } = require('./persistenciaFlujo');
+const { limpiarFlujoPersistido, reactivarCliente, marcarAtencionManual } = require('./persistenciaFlujo');
 const { esAdministrador } = require('./auth');
 const { resolverUrlComprobante } = require('./comprobantesStorage');
 const { capitalizar, esPaisValido, sanitizarBusqueda, obtenerEmoji, formatearMoneda } = require('./utils');
-const { LIMITES } = require('./config');
+const { LIMITES, PAUSA_USUARIO_MS } = require('./config');
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -446,10 +446,12 @@ async function ejecutarComando(client, message, contexto) {
 
         if (!realId) return client.sendText(chatId, '❌ Cliente no encontrado.');
 
-        // Aplicamos la pausa en la memoria compartida
-        contexto.clientesPausados[realId] = Date.now() + PAUSA_USUARIO_MS;
+        delete estadoCliente[realId];
+        delete datosEnvio[realId];
+        limpiarFlujo(realId);
+        cancelarRecordatorio(realId);
+        await marcarAtencionManual(supabase, realId, contexto.clientesPausados, PAUSA_USUARIO_MS);
 
-        // Avisamos al cliente
         await client.sendText(realId, '⚠️ *MENSAJE DE SISTEMA*\n\nUn administrador ha pausado mis funciones para tu chat temporalmente (1 hora). Si necesitas atención urgente, por favor espera a ser contactado.');
 
         return client.sendText(chatId, `🚫 Bot pausado para el cliente #${parametro} durante 1 hora.`);
@@ -462,10 +464,10 @@ async function ejecutarComando(client, message, contexto) {
 
         if (!realId) return client.sendText(chatId, '❌ Cliente no encontrado.');
 
-        delete contexto.clientesPausados[realId]; // Borramos la pausa
+        await reactivarCliente(supabase, realId, contexto.clientesPausados);
 
         await client.sendText(realId, '✅ *SISTEMA RE-ACTIVADO*\n\nHola de nuevo, ya puedo responder tus mensajes. ¿En qué puedo ayudarte?');
-        
+
         return client.sendText(chatId, `✅ Bot reactivado para el cliente #${parametro}.`);
     }
 
@@ -536,11 +538,15 @@ async function ejecutarComando(client, message, contexto) {
     if (texto.startsWith('!reset ')) {
         const parametro = texto.split(' ')[1].trim();
         const realId = await obtenerIdReal(parametro);
-        
+
         const target = realId || parametro; // Por si falla, usa el input crudo
         delete estadoCliente[target];
         delete datosEnvio[target];
-        
+        limpiarFlujo(target);
+        cancelarRecordatorio(target);
+        await reactivarCliente(supabase, target, contexto.clientesPausados);
+        await limpiarFlujoPersistido(supabase, target);
+
         return client.sendText(chatId, `🧹 Memoria limpiada para el cliente #${parametro}.`);
     }
 

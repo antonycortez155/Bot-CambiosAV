@@ -4,7 +4,23 @@ const { ESTADOS_FLUJO } = require('./recuperacionFlujo');
 
 const pausasManuales = new Map();
 
+function pausaActivaHasta(clienteId) {
+  const hasta = pausasManuales.get(clienteId);
+  if (!hasta) return null;
+  if (Date.now() >= hasta) {
+    pausasManuales.delete(clienteId);
+    return null;
+  }
+  return hasta;
+}
+
 function expiracionPausa(clienteId, clientesPausados) {
+  const hastaMapa = pausaActivaHasta(clienteId);
+  if (hastaMapa) {
+    if (clientesPausados) clientesPausados[clienteId] = hastaMapa;
+    return hastaMapa;
+  }
+
   const hasta = clientesPausados?.[clienteId];
   if (!hasta) return null;
   if (Date.now() >= hasta) {
@@ -16,23 +32,27 @@ function expiracionPausa(clienteId, clientesPausados) {
 }
 
 function fueAtendidoManual(clienteId, clientesPausados) {
-  const hasta = pausasManuales.get(clienteId);
-  if (!hasta) return false;
-  if (Date.now() >= hasta) {
-    pausasManuales.delete(clienteId);
-    if (clientesPausados) delete clientesPausados[clienteId];
-    return false;
-  }
-  return true;
+  return Boolean(expiracionPausa(clienteId, clientesPausados));
 }
 
 function estaPausado(clienteId, clientesPausados) {
-  expiracionPausa(clienteId, clientesPausados);
-  return Boolean(clientesPausados?.[clienteId] && Date.now() < clientesPausados[clienteId]);
+  return Boolean(expiracionPausa(clienteId, clientesPausados));
 }
 
-async function limpiarAtencionManualExpirada(supabase, clienteId) {
+function limpiarPausasExpiradas(clientesPausados) {
+  const ahora = Date.now();
+  for (const [id, hasta] of pausasManuales) {
+    if (hasta <= ahora) pausasManuales.delete(id);
+  }
+  if (!clientesPausados) return;
+  for (const id of Object.keys(clientesPausados)) {
+    if (clientesPausados[id] <= ahora) delete clientesPausados[id];
+  }
+}
+
+async function limpiarAtencionManualExpirada(supabase, clienteId, clientesPausados) {
   pausasManuales.delete(clienteId);
+  if (clientesPausados) delete clientesPausados[clienteId];
   await dbQuery(
     supabase.from('flujos_activos').upsert([{
       cliente_id: clienteId,
@@ -45,6 +65,8 @@ async function limpiarAtencionManualExpirada(supabase, clienteId) {
 
 async function persistirFlujo(supabase, clienteId, estado, datos) {
   if (!clienteId || !estado || !ESTADOS_FLUJO.has(estado)) return;
+  // No sobrescribir una pausa activa (carrera !stop vs mensaje en cola)
+  if (pausaActivaHasta(clienteId)) return;
 
   await dbQuery(
     supabase.from('flujos_activos').upsert([{
@@ -59,7 +81,22 @@ async function persistirFlujo(supabase, clienteId, estado, datos) {
 }
 
 async function limpiarFlujoPersistido(supabase, clienteId) {
-  pausasManuales.delete(clienteId);
+  const hasta = pausaActivaHasta(clienteId);
+  if (hasta) {
+    // Mantener la pausa; solo vaciar el flujo
+    await dbQuery(
+      supabase.from('flujos_activos').upsert([{
+        cliente_id: clienteId,
+        estado: null,
+        datos: {},
+        atendido_manual: true,
+        pausado_hasta: new Date(hasta).toISOString(),
+        updated_at: new Date().toISOString(),
+      }], { onConflict: 'cliente_id' })
+    ).catch((err) => console.error('[PERSISTENCIA] Error limpiando flujo (pausado):', err.message));
+    return;
+  }
+
   await dbQuery(
     supabase.from('flujos_activos').delete().eq('cliente_id', clienteId)
   ).catch((err) => console.error('[PERSISTENCIA] Error limpiando flujo:', err.message));
@@ -68,7 +105,7 @@ async function limpiarFlujoPersistido(supabase, clienteId) {
 async function marcarAtencionManual(supabase, clienteId, clientesPausados, duracionMs = PAUSA_MANUAL_MS) {
   const expiry = Date.now() + duracionMs;
   pausasManuales.set(clienteId, expiry);
-  clientesPausados[clienteId] = expiry;
+  if (clientesPausados) clientesPausados[clienteId] = expiry;
 
   await dbQuery(
     supabase.from('flujos_activos').upsert([{
@@ -122,7 +159,7 @@ async function cargarFlujosActivos(supabase, estadoCliente, datosEnvio, clientes
       pausasManuales.set(a.cliente_id, pausaHasta);
       clientesPausados[a.cliente_id] = pausaHasta;
     } else {
-      await limpiarAtencionManualExpirada(supabase, a.cliente_id);
+      await limpiarAtencionManualExpirada(supabase, a.cliente_id, clientesPausados);
     }
   }
 
@@ -138,7 +175,7 @@ async function sincronizarEstadoCliente(supabase, clienteId, estadoCliente, dato
 
 async function reactivarCliente(supabase, clienteId, clientesPausados) {
   pausasManuales.delete(clienteId);
-  delete clientesPausados[clienteId];
+  if (clientesPausados) delete clientesPausados[clienteId];
 
   await dbQuery(
     supabase.from('flujos_activos').upsert([{
@@ -158,6 +195,7 @@ module.exports = {
   marcarAtencionManual,
   fueAtendidoManual,
   estaPausado,
+  limpiarPausasExpiradas,
   cargarFlujosActivos,
   sincronizarEstadoCliente,
   reactivarCliente,
