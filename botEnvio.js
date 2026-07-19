@@ -16,6 +16,12 @@ function fueEnvioBot(chatId) {
   return true;
 }
 
+function limpiarEnviosRecientes(ahora = Date.now()) {
+  for (const [chatId, t] of enviosRecientesBot) {
+    if (ahora - t > VENTANA_MS) enviosRecientesBot.delete(chatId);
+  }
+}
+
 function envolverCliente(client) {
   const originalSendText = client.sendText.bind(client);
   client.sendText = async (to, message, ...args) => {
@@ -42,4 +48,4 @@ function envolverCliente(client) {
   return client;
 }
 
-module.exports = { marcarEnvioBot, fueEnvioBot, envolverCliente };
+module.exports = { marcarEnvioBot, fueEnvioBot, envolverCliente, limpiarEnviosRecientes };

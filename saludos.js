@@ -2,6 +2,8 @@
 
 const { dbQuery } = require('./supabase');
 const registroSaludos = {};
+const MAX_REGISTRO = 400;
+const TTL_SALUDO_MS = 3600000;
 
 const obtenerIntroducciones = (nombre, saludoTiempo) => {
     const n = nombre ? ` ${nombre}` : '';
@@ -19,6 +21,19 @@ const instrucciones = [
     `✨ Para cotizar o enviar, escríbeme el monto y los países.`,
 ];
 
+function limpiarRegistroSaludos(ahora = Date.now()) {
+    for (const id of Object.keys(registroSaludos)) {
+        if (ahora - registroSaludos[id] >= TTL_SALUDO_MS) delete registroSaludos[id];
+    }
+    const keys = Object.keys(registroSaludos);
+    if (keys.length > MAX_REGISTRO) {
+        keys
+            .sort((a, b) => registroSaludos[a] - registroSaludos[b])
+            .slice(0, keys.length - MAX_REGISTRO)
+            .forEach((id) => delete registroSaludos[id]);
+    }
+}
+
 async function manejarSaludo(client, message, estadoCliente, supabase) {
     if (message.from === 'status@broadcast' || message.isBroadcast) return false;
 
@@ -32,7 +47,7 @@ async function manejarSaludo(client, message, estadoCliente, supabase) {
 
     const ahora = Date.now();
     const ultimoSaludo = registroSaludos[clienteId];
-    if (ultimoSaludo && (ahora - ultimoSaludo < 3600000)) return true;
+    if (ultimoSaludo && (ahora - ultimoSaludo < TTL_SALUDO_MS)) return true;
 
     let nombreOficial = null;
     try {
@@ -57,7 +72,8 @@ async function manejarSaludo(client, message, estadoCliente, supabase) {
 
     await client.sendText(chatId, `${introElegida}\n\n${instruccionElegida}`);
     registroSaludos[clienteId] = ahora;
+    if (Object.keys(registroSaludos).length > MAX_REGISTRO) limpiarRegistroSaludos(ahora);
     return true;
 }
 
-module.exports = { manejarSaludo };
+module.exports = { manejarSaludo, limpiarRegistroSaludos };

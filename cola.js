@@ -1,7 +1,13 @@
 const colasPorCliente = new Map();
-const MAX_COLAS = 300;
+const MAX_COLAS = 200;
 
 function encolar(clienteId, tarea) {
+  // No evictar colas activas: borrar keys rompe la serialización por cliente
+  if (!colasPorCliente.has(clienteId) && colasPorCliente.size >= MAX_COLAS) {
+    console.warn(`[COLA] Capacidad llena (${MAX_COLAS}), ignorando ${clienteId}`);
+    return Promise.resolve();
+  }
+
   const anterior = colasPorCliente.get(clienteId) || Promise.resolve();
   const siguiente = anterior
     .then(() => tarea())
@@ -15,13 +21,6 @@ function encolar(clienteId, tarea) {
     });
 
   colasPorCliente.set(clienteId, siguiente);
-
-  if (colasPorCliente.size > MAX_COLAS) {
-    const excess = colasPorCliente.size - MAX_COLAS;
-    const keys = [...colasPorCliente.keys()].slice(0, excess);
-    keys.forEach((k) => colasPorCliente.delete(k));
-  }
-
   return siguiente;
 }
 

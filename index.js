@@ -3,24 +3,41 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const wppconnect = require('@wppconnect-team/wppconnect');
+const winston = require('winston');
+// Silenciar spam debug (Emitting onAnyMessage, Exposing function, etc.)
+try {
+  wppconnect.defaultLogger.level = 'error';
+  for (const t of wppconnect.defaultLogger.transports || []) {
+    t.level = 'error';
+  }
+} catch {
+  // ignore
+}
 const { supabase, dbQuery } = require('./supabase');
 const { ADMIN_NUMEROS, ADMIN_DESTINOS_NOTIFICACION, LIMITES, PAUSA_USUARIO_MS } = require('./config');
 const { esAdministrador } = require('./auth');
 const { encolar } = require('./cola');
-const { excedeRateLimit } = require('./rateLimit');
+const { excedeRateLimit, podarRateLimit } = require('./rateLimit');
 const { iniciarHealthCheck, detenerHealthCheck, configurarReinicioPorDesconexion } = require('./healthCheck');
 const { programarRecordatorio, cancelarRecordatorio } = require('./recordatorioComprobante');
-const { registrarActividad, guardarSnapshot, limpiarFlujo, manejarReanudacion, ESTADOS_FLUJO } = require('./recuperacionFlujo');
+const {
+  registrarActividad,
+  guardarSnapshot,
+  limpiarFlujo,
+  limpiarFlujosExpirados,
+  manejarReanudacion,
+  ESTADOS_FLUJO,
+} = require('./recuperacionFlujo');
 const { manejarIntencionCliente } = require('./intenciones');
 const { manejarComandos } = require('./comandos');
 const { iniciarProgramadorDifusiones, detenerProgramadorDifusiones } = require('./difusiones');
 const { manejarAgradecimiento } = require('./agradecimientos');
-const { manejarSaludo } = require('./saludos');
+const { manejarSaludo, limpiarRegistroSaludos } = require('./saludos');
 const { subirComprobante } = require('./comprobantesStorage');
 const { formatearMoneda, esChatPrivado, validarBufferImagen, capitalizar } = require('./utils');
 const { ESTADOS_FLUJO_ENVIO } = require('./constantesEnvio');
 const { manejarFlujoEnvio } = require('./flujoEnvio');
-const { envolverCliente, fueEnvioBot } = require('./botEnvio');
+const { envolverCliente, fueEnvioBot, limpiarEnviosRecientes } = require('./botEnvio');
 const {
   cargarFlujosActivos,
   marcarAtencionManual,
@@ -62,7 +79,42 @@ let canalRealtime = null;
 let intentosArranque = 0;
 const mensajesProcesados = new Map();
 const TTL_MENSAJE_MS = 60000;
-const MAX_MENSAJES_CACHE = 400;
+const MAX_MENSAJES_CACHE = 250;
+
+/** Flags Chrome/Chromium agresivos para ~1 GB RAM (aplicar en browserArgs y puppeteer). */
+const CHROME_LITE_ARGS = [
+  '--no-sandbox',
+  '--disable-setuid-sandbox',
+  '--disable-dev-shm-usage',
+  '--disable-accelerated-2d-canvas',
+  '--no-first-run',
+  '--no-default-browser-check',
+  '--disable-gpu',
+  '--disable-software-rasterizer',
+  '--disable-extensions',
+  '--disable-default-apps',
+  '--disable-background-networking',
+  '--disable-sync',
+  '--disable-translate',
+  '--mute-audio',
+  '--disable-notifications',
+  '--disable-popup-blocking',
+  '--disable-hang-monitor',
+  '--disable-breakpad',
+  '--disable-component-update',
+  '--disable-domain-reliability',
+  '--disable-client-side-phishing-detection',
+  '--disable-background-timer-throttling',
+  '--disable-renderer-backgrounding',
+  '--disable-backgrounding-occluded-windows',
+  '--disable-ipc-flooding-protection',
+  '--metrics-recording-only',
+  '--renderer-process-limit=1',
+  '--disk-cache-size=1',
+  '--media-cache-size=1',
+  '--disable-features=TranslateUI,BlinkGenPropertyTrees,AudioServiceOutOfProcess,IsolateOrigins,site-per-process,CalculateNativeWinOcclusion,InterestFeedContentSuggestions',
+  '--js-flags=--max-old-space-size=192',
+];
 
 function esMensajeDuplicado(message) {
   const id = message.id?._serialized || message.id;
@@ -147,12 +199,16 @@ function limpiarMemoriaExpirada() {
     }
   }
   limpiarCooldownExpirados();
+  limpiarFlujosExpirados(ahora);
+  limpiarRegistroSaludos(ahora);
+  podarRateLimit(ahora);
+  limpiarEnviosRecientes(ahora);
 }
 
 function limpiezaProfunda() {
   limpiarMemoriaExpirada();
   invalidarCacheTasas();
-  cancelarTimersEncuesta();
+  // No cancelar timersEncuesta: la encuesta diferida (3 min) debe completarse
   mensajesProcesados.clear();
   if (global.gc) global.gc();
 }
@@ -294,36 +350,24 @@ async function iniciarBot() {
       debug: false,
       logQR: true,
       updatesLog: false,
+      disableWelcome: true,
       waitForLogin: true,
+      // Silencia spam debug de WPPConnect (onAnyMessage, etc.)
+      logger: winston.createLogger({
+        level: 'error',
+        format: winston.format.combine(
+          winston.format.colorize(),
+          winston.format.printf(({ level, message }) => `${level}: ${message}`)
+        ),
+        transports: [new winston.transports.Console()],
+      }),
       puppeteerOptions: {
         protocolTimeout: 180000,
         handleSIGINT: false,
         handleSIGTERM: false,
-        args: [],
+        args: [...CHROME_LITE_ARGS],
       },
-      browserArgs: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-default-browser-check',
-        '--disable-gpu',
-        '--disable-software-rasterizer',
-        '--disable-extensions',
-        '--disable-default-apps',
-        '--disable-background-networking',
-        '--disable-sync',
-        '--disable-translate',
-        '--mute-audio',
-        '--disable-notifications',
-        '--disable-popup-blocking',
-        '--renderer-process-limit=1',
-        '--disk-cache-size=1',
-        '--media-cache-size=1',
-        '--disable-features=TranslateUI,BlinkGenPropertyTrees,AudioServiceOutOfProcess,IsolateOrigins,site-per-process',
-        '--js-flags=--max-old-space-size=256',
-      ],
+      browserArgs: [...CHROME_LITE_ARGS],
     });
     clientGlobal = envolverCliente(client);
     intentosArranque = 0;
@@ -352,9 +396,13 @@ async function procesarMensajeEntrante(client, message) {
 
   if (estaPausado(clienteId, clientesPausados)) {
     if (estadoCliente[clienteId] === 'esperando_comprobante') {
-      return client.sendText(chatId, '📸 Envía una *imagen* (captura) de tu comprobante de pago.');
+      // Permitir la imagen del comprobante aunque esté en pausa; texto solo recuerda
+      if (!(message.isMedia || message.mimetype)) {
+        return client.sendText(chatId, '📸 Envía una *imagen* (captura) de tu comprobante de pago.');
+      }
+    } else {
+      return;
     }
-    return;
   }
 
   const esAdmin = esAdministrador(clienteId);
@@ -389,20 +437,26 @@ async function procesarMensajeEntrante(client, message) {
           return client.sendText(chatId, '❌ Solo se aceptan imágenes (JPG, PNG). Envía una captura de tu comprobante.');
         }
 
-        const buffer = await client.decryptFile(message);
-        if (!buffer || buffer.length > LIMITES.COMPROBANTE_MAX_BYTES) {
-          return client.sendText(chatId, '❌ Imagen demasiado grande. Máximo 5 MB.');
+        let buffer = await client.decryptFile(message);
+        if (!buffer) {
+          return client.sendText(chatId, '❌ No pude leer la imagen. Envía de nuevo la captura (JPG o PNG).');
+        }
+        if (buffer.length > LIMITES.COMPROBANTE_MAX_BYTES) {
+          buffer = null;
+          return client.sendText(chatId, '❌ Imagen demasiado grande. Máximo 3 MB.');
         }
 
         const formato = validarBufferImagen(buffer);
         if (!formato) {
+          buffer = null;
           return client.sendText(chatId, '❌ Archivo no válido. Envía una imagen JPG o PNG de tu comprobante.');
         }
 
         const numeroLimpio = clienteId.replace('@c.us', '').replace('@lid', '');
         const fileName = `comprobante_${numeroLimpio}_${Date.now()}.${formato.ext}`;
+        const mimeTipo = formato.mime;
 
-        await subirComprobante(supabase, buffer, fileName, formato.mime);
+        await subirComprobante(supabase, buffer, fileName, mimeTipo);
 
         await dbQuery(supabase.from('comprobantes').insert([{
           transaccion_id: transaccionId,
@@ -427,6 +481,7 @@ async function procesarMensajeEntrante(client, message) {
         );
 
         if (updateError || !actualizado) {
+          buffer = null;
           return client.sendText(
             chatId,
             '✅ Ya recibimos tu comprobante. Nuestro equipo lo está revisando.'
@@ -481,21 +536,29 @@ async function procesarMensajeEntrante(client, message) {
           `👉 Aprobar: *!ok ${idCorto}*\n` +
           `📸 Ver comprobante: *!comprobante ${idCorto}*`;
 
-        const imagenBase64 = `data:${formato.mime};base64,${buffer.toString('base64')}`;
+        // Base64 solo al notificar (1.er admin); libera buffer de inmediato
+        let imagenBase64 = buffer
+          ? `data:${mimeTipo};base64,${buffer.toString('base64')}`
+          : null;
+        buffer = null;
 
-        for (const admin of ADMIN_DESTINOS_NOTIFICACION) {
+        const destinos = ADMIN_DESTINOS_NOTIFICACION;
+        for (let i = 0; i < destinos.length; i++) {
+          const admin = destinos[i];
           try {
-            await client.sendImageFromBase64(
-              admin,
-              imagenBase64,
-              fileName,
-              avisoAdmin
-            );
+            if (i === 0 && imagenBase64) {
+              await client.sendImageFromBase64(admin, imagenBase64, fileName, avisoAdmin);
+              imagenBase64 = null;
+            } else {
+              await client.sendText(admin, avisoAdmin);
+            }
           } catch (err) {
-            console.warn(`[COMPROBANTE] No se pudo enviar imagen a ${admin}:`, err.message);
+            console.warn(`[COMPROBANTE] No se pudo notificar a ${admin}:`, err.message);
             await client.sendText(admin, avisoAdmin).catch(() => {});
           }
         }
+        imagenBase64 = null;
+        if (global.gc) global.gc();
         resetearIntentos(clienteId);
         return;
       } catch (err) {
@@ -714,9 +777,9 @@ function start(client) {
 
   iniciarProgramadorDifusiones(client);
   habilitarEscuchadorRealtime(client);
-  iniciarHealthCheck(client, ADMIN_NUMEROS[0], reiniciarBot, 240000);
+  iniciarHealthCheck(client, ADMIN_NUMEROS[0], reiniciarBot, 300000);
   configurarReinicioPorDesconexion(client, ADMIN_NUMEROS[0], reiniciarBot);
-  iniciarLimpiezaNocturna({ onLimpieza: limpiezaProfunda });
+  iniciarLimpiezaNocturna({ onLimpieza: limpiezaProfunda, sessionName: SESSION_NAME });
 
   client.onAnyMessage((message) => {
     if (message.from === 'status@broadcast' || message.isBroadcast) return;

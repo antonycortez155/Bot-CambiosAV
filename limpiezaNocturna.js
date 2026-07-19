@@ -4,9 +4,55 @@ const path = require('path');
 
 let job = null;
 
+const CACHE_DIRS = ['Cache', 'Code Cache', 'GPUCache', 'blob_storage'];
+
+function limpiarDirSiExiste(dir) {
+  if (!fs.existsSync(dir)) return;
+  try {
+    for (const f of fs.readdirSync(dir)) {
+      const full = path.join(dir, f);
+      try {
+        const st = fs.lstatSync(full);
+        if (st.isDirectory()) {
+          fs.rmSync(full, { recursive: true, force: true });
+        } else {
+          fs.unlinkSync(full);
+        }
+      } catch {
+        // archivo en uso por Chrome
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Limpia caches de disco de Chromium (no toca IndexedDB/cookies de sesión).
+ */
+function limpiarCachesChromeSesion(sessionName = 'cambios-ayv-lite') {
+  const sessionDir = path.join(__dirname, 'tokens', sessionName);
+  if (!fs.existsSync(sessionDir)) return;
+
+  const candidatos = [sessionDir];
+  try {
+    for (const entry of fs.readdirSync(sessionDir, { withFileTypes: true })) {
+      if (entry.isDirectory()) candidatos.push(path.join(sessionDir, entry.name));
+    }
+  } catch {
+    // ignore
+  }
+
+  for (const base of candidatos) {
+    for (const nombre of CACHE_DIRS) {
+      limpiarDirSiExiste(path.join(base, nombre));
+    }
+  }
+}
+
 /**
  * Limpieza diaria a las 02:00 hora Venezuela (America/Caracas).
- * Libera mapas en memoria, logs temporales y fuerza GC si está disponible.
+ * Libera mapas en memoria, caches de Chrome en disco y fuerza GC si está disponible.
  */
 function iniciarLimpiezaNocturna(hooks = {}) {
   detenerLimpiezaNocturna();
@@ -28,6 +74,8 @@ function iniciarLimpiezaNocturna(hooks = {}) {
             }
           }
         }
+
+        limpiarCachesChromeSesion(hooks.sessionName || 'cambios-ayv-lite');
 
         if (global.gc) {
           global.gc();
@@ -55,4 +103,4 @@ function detenerLimpiezaNocturna() {
   }
 }
 
-module.exports = { iniciarLimpiezaNocturna, detenerLimpiezaNocturna };
+module.exports = { iniciarLimpiezaNocturna, detenerLimpiezaNocturna, limpiarCachesChromeSesion };

@@ -40,6 +40,22 @@ function limpiarFlujo(clienteId) {
   delete ultimaActividad[clienteId];
 }
 
+function limpiarFlujosExpirados(ahora = Date.now()) {
+  for (const id of Object.keys(flujosGuardados)) {
+    const flujo = flujosGuardados[id];
+    // No borrar si el usuario aún debe responder SÍ/NO
+    if (flujo?.preguntado) continue;
+    if (!flujo?.updatedAt || ahora - flujo.updatedAt > EXPIRACION_MS) {
+      delete flujosGuardados[id];
+    }
+  }
+  for (const id of Object.keys(ultimaActividad)) {
+    if (ahora - ultimaActividad[id] > EXPIRACION_MS && !flujosGuardados[id]) {
+      delete ultimaActividad[id];
+    }
+  }
+}
+
 function describirFlujo(datos) {
   if (datos?.origen && datos?.destino) {
     return `${capitalizar(datos.origen)} → ${capitalizar(datos.destino)}`;
@@ -67,16 +83,20 @@ async function manejarReanudacion(client, chatId, clienteId, texto, estadoClient
   if (estadoCliente[clienteId] === 'esperando_reanudacion') {
     if (esSi(t) || t === 'continuar') {
       const flujo = flujosGuardados[clienteId];
-      if (!flujo || !flujoTieneDatosUtiles(flujo.datos)) {
+      const datos = (flujo && flujoTieneDatosUtiles(flujo.datos))
+        ? flujo.datos
+        : (flujoTieneDatosUtiles(datosEnvio[clienteId]) ? datosEnvio[clienteId] : null);
+      const estadoPrev = flujo?.estado;
+      if (!datos || !estadoPrev || !ESTADOS_FLUJO.has(estadoPrev)) {
         return descartar('❌ No encontré un envío pendiente válido. Escribe *"quiero enviar"* para empezar.');
       }
-      estadoCliente[clienteId] = flujo.estado;
-      datosEnvio[clienteId] = { ...flujo.datos };
+      estadoCliente[clienteId] = estadoPrev;
+      datosEnvio[clienteId] = { ...datos };
       ultimaActividad[clienteId] = Date.now();
-      flujo.preguntado = false;
+      if (flujo) flujo.preguntado = false;
       return client.sendText(
         chatId,
-        `✅ *Continuamos tu envío* (${describirFlujo(flujo.datos)})\n\nResponde donde lo dejaste (por ejemplo el método de pago o el monto).`
+        `✅ *Continuamos tu envío* (${describirFlujo(datos)})\n\nResponde donde lo dejaste (por ejemplo el método de pago o el monto).`
       );
     }
     if (esNo(t) || t === 'cancelar') {
@@ -133,6 +153,7 @@ module.exports = {
   registrarActividad,
   guardarSnapshot,
   limpiarFlujo,
+  limpiarFlujosExpirados,
   manejarReanudacion,
   ESTADOS_FLUJO,
   flujoTieneDatosUtiles,

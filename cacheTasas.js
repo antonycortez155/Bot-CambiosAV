@@ -19,7 +19,9 @@ function guardar(entry, data) {
 
 async function obtenerTodasLasTasas(supabase, dbQuery) {
   if (!expirado(cache.tasas)) return cache.tasas.data;
-  const { data, error } = await dbQuery(supabase.from('tasas').select('*'));
+  const { data, error } = await dbQuery(
+    supabase.from('tasas').select('id, origen, destino, valor, tipo')
+  );
   if (error) throw error;
   guardar(cache.tasas, data || []);
   cache.rutas.clear();
@@ -40,7 +42,7 @@ async function obtenerTasaRuta(supabase, dbQuery, origen, destino) {
 async function obtenerDolarVenezuela(supabase, dbQuery) {
   if (!expirado(cache.dolarVenezuela)) return cache.dolarVenezuela.data;
   const { data, error } = await dbQuery(
-    supabase.from('dolar_venezuela').select('*').eq('id', 1).single()
+    supabase.from('dolar_venezuela').select('id, tasa_bcv, tasa_euro, tasa_binance').eq('id', 1).single()
   );
   if (error) throw error;
   return guardar(cache.dolarVenezuela, data);

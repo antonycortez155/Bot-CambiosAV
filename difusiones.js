@@ -9,6 +9,8 @@ let intervaloDifusion = null;
 const idsEnProceso = new Set();
 
 const TIMEOUT_DIFUSIONES_MS = 25000;
+const PAGE_SIZE = 40;
+const CAMPOS_DIFUSION = 'id, mensaje, segmento, estado, fecha_programada';
 
 async function procesarDifusionesPendientes(client) {
   if (ejecutandoDifusion) return;
@@ -32,7 +34,12 @@ async function procesarDifusionesPendientes(client) {
       if (idsEnProceso.has(id)) continue;
 
       const { data: difusion, error: readError } = await dbQuery(
-        supabase.from('difusiones').select('*').eq('id', id).eq('estado', 'pendiente').single(),
+        supabase
+          .from('difusiones')
+          .select(CAMPOS_DIFUSION)
+          .eq('id', id)
+          .eq('estado', 'pendiente')
+          .single(),
         TIMEOUT_DIFUSIONES_MS
       );
 
@@ -41,45 +48,85 @@ async function procesarDifusionesPendientes(client) {
       idsEnProceso.add(id);
       console.log(`📢 Iniciando difusión programada ID: ${difusion.id}`);
 
+      // Evita reenvío masivo si PM2 reinicia a mitad de campaña
+      const { data: claimed } = await dbQuery(
+        supabase
+          .from('difusiones')
+          .update({ estado: 'enviando' })
+          .eq('id', difusion.id)
+          .eq('estado', 'pendiente')
+          .select('id')
+          .single(),
+        TIMEOUT_DIFUSIONES_MS
+      );
+      if (!claimed) {
+        idsEnProceso.delete(id);
+        continue;
+      }
+
       try {
-        let query = supabase.from('clientes').select('id');
-        if (difusion.segmento === 'vip') query = query.eq('es_vip', true);
-        if (difusion.segmento === 'no_vip') query = query.eq('es_vip', false);
+        let enviados = 0;
+        let fallidos = 0;
+        let from = 0;
+        let hayClientes = false;
+        let errorPagina = false;
 
-        const { data: clientes, error: cliError } = await dbQuery(query, TIMEOUT_DIFUSIONES_MS);
+        while (true) {
+          let query = supabase
+            .from('clientes')
+            .select('id')
+            .order('id', { ascending: true })
+            .range(from, from + PAGE_SIZE - 1);
+          if (difusion.segmento === 'vip') query = query.eq('es_vip', true);
+          if (difusion.segmento === 'no_vip') query = query.eq('es_vip', false);
 
-        if (cliError || !clientes?.length) {
+          const { data: clientes, error: cliError } = await dbQuery(query, TIMEOUT_DIFUSIONES_MS);
+
+          if (cliError) {
+            console.error(`[DIFUSIONES] Error página clientes ID ${id}:`, cliError.message);
+            errorPagina = true;
+            break;
+          }
+
+          if (!clientes?.length) break;
+          hayClientes = true;
+
+          for (const cliente of clientes) {
+            try {
+              await client.sendText(cliente.id, difusion.mensaje);
+              enviados++;
+              await delay(Math.floor(Math.random() * (12000 - 5000 + 1)) + 5000);
+            } catch {
+              fallidos++;
+            }
+          }
+
+          if (clientes.length < PAGE_SIZE) break;
+          from += PAGE_SIZE;
+        }
+
+        if (!hayClientes && !errorPagina) {
           await dbQuery(supabase.from('difusiones').update({ estado: 'error' }).eq('id', difusion.id));
           continue;
         }
 
-        let enviados = 0;
-        let fallidos = 0;
-
-        for (const cliente of clientes) {
-          try {
-            await client.sendText(cliente.id, difusion.mensaje);
-            enviados++;
-            await delay(Math.floor(Math.random() * (12000 - 5000 + 1)) + 5000);
-          } catch {
-            fallidos++;
-          }
-        }
-
+        // Si hubo envíos parciales, marcar enviado (no reintentar desde cero)
+        const estadoFinal = (!hayClientes && errorPagina) ? 'error' : 'enviado';
         await dbQuery(
           supabase.from('difusiones')
-            .update({ estado: 'enviado' })
+            .update({ estado: estadoFinal })
             .eq('id', difusion.id)
-            .eq('estado', 'pendiente')
+            .eq('estado', 'enviando')
         );
 
-        if (ADMIN_NUMERO) {
+        if (ADMIN_NUMERO && (enviados > 0 || fallidos > 0)) {
+          const nota = errorPagina ? '\n⚠️ Terminó con error de página (parcial).' : '';
           await client.sendText(ADMIN_NUMERO,
             `✅ *REPORTE DE DIFUSIÓN* 📢\n\n` +
             `📝 Mensaje: "${difusion.mensaje.substring(0, 30)}..."\n` +
             `👥 Segmento: ${difusion.segmento.toUpperCase()}\n` +
             `🚀 Enviados con éxito: *${enviados}*\n` +
-            `❌ Fallidos: *${fallidos}*`
+            `❌ Fallidos: *${fallidos}*${nota}`
           ).catch(() => {});
         }
       } catch (err) {

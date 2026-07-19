@@ -4,7 +4,7 @@
   "description": "Cambios AV Bot Lite — bajo consumo RAM (~1GB), misma BD, estable 24/7",
   "main": "index.js",
   "scripts": {
-    "start": "node --max-old-space-size=384 --expose-gc index.js",
+    "start": "node --max-old-space-size=320 --expose-gc index.js",
     "start:pm2": "pm2 start ecosystem.config.cjs"
   },
   "keywords": ["whatsapp", "bot", "lite"],

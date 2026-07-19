@@ -11,17 +11,20 @@ El proyecto original en `Documents\BOT CAMBIOS AV` **no se modifica**.
 - Estado / historial  
 - Menú fallback (1 vez cada 6 h)  
 - Handoff a asesor  
-- Difusiones (más espaciadas)  
+- Difusiones (paginadas, más espaciadas)  
 - Health check + auto-reinicio  
 - Limpieza diaria a las **02:00 hora Venezuela**
 
-## Qué se recortó (para ahorrar RAM)
+## Qué se recortó / optimizó (para ~1 GB)
 
-- Estados / stories de WhatsApp (`estados.js`)  
-- `getLatestVersion` (menos overhead al arrancar)  
-- Heap Node 384 MB / Chrome más agresivo  
-- Difusiones cada 5 min (máx. 2 por ciclo)  
-- Cachés y mapas más pequeños  
+- Sin estados / stories de WhatsApp (`estados.js`)  
+- Heap Node **320 MB** / Chrome renderer **~192 MB**  
+- Flags Chrome agresivos (1 renderer, sin GPU, caches mínimas)  
+- Difusiones paginadas (40 clientes) cada 5 min (máx. 2 por ciclo)  
+- Comprobante máx. **3 MB**; imagen al 1.er admin, texto al resto  
+- Evicción de mapas (saludos, rate-limit, flujos, botEnvio)  
+- Limpieza nocturna de caches de Chromium en disco  
+- Cachés y colas más pequeños  
 
 ## Arranque local
 
@@ -43,7 +46,7 @@ pm2 save
 pm2 startup
 ```
 
-PM2 reinicia si el proceso cae o supera ~700 MB RSS.
+PM2 reinicia el proceso Node si supera ~**450 MB** RSS (Chrome va aparte; deja margen al SO).
 
 ## Variables
 
@@ -52,4 +55,5 @@ Misma `SUPABASE_URL` / `SUPABASE_KEY` / admins.
 
 ## Nota
 
-No ejecutes Lite y el bot completo con el **mismo número** al mismo tiempo (conflicto de sesión WhatsApp).
+No ejecutes Lite y el bot completo con el **mismo número** al mismo tiempo (conflicto de sesión WhatsApp).  
+En un VPS de 1 GB no corras otros navegadores/Chrome junto a este bot.
