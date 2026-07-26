@@ -7,12 +7,16 @@
     "start": "node --max-old-space-size=320 --expose-gc index.js",
     "start:pm2": "pm2 start ecosystem.config.cjs"
   },
-  "keywords": ["whatsapp", "bot", "lite"],
+  "keywords": [
+    "whatsapp",
+    "bot",
+    "lite"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "@supabase/supabase-js": "^2.105.4",
-    "@wppconnect-team/wppconnect": "^2.0.2",
+    "@wppconnect-team/wppconnect": "^2.2.2",
     "dotenv": "^17.4.2",
     "node-cron": "^4.2.1"
   }

@@ -33,7 +33,7 @@ const { iniciarProgramadorDifusiones, detenerProgramadorDifusiones } = require('
 const { manejarAgradecimiento } = require('./agradecimientos');
 const { manejarSaludo, limpiarRegistroSaludos } = require('./saludos');
 const { subirComprobante } = require('./comprobantesStorage');
-const { formatearMoneda, esChatPrivado, validarBufferImagen, capitalizar } = require('./utils');
+const { formatearMoneda, esChatPrivado, validarBufferImagen, capitalizar, normalizarWid, serializarIdMensaje } = require('./utils');
 const { ESTADOS_FLUJO_ENVIO } = require('./constantesEnvio');
 const { manejarFlujoEnvio } = require('./flujoEnvio');
 const { envolverCliente, limpiarEnviosRecientes } = require('./botEnvio');
@@ -116,7 +116,7 @@ const CHROME_LITE_ARGS = [
 ];
 
 function esMensajeDuplicado(message) {
-  const id = message.id?._serialized || message.id;
+  const id = serializarIdMensaje(message);
   if (!id) return false;
 
   const ahora = Date.now();
@@ -371,8 +371,10 @@ async function iniciarBot() {
 async function procesarMensajeEntrante(client, message) {
   if (esMensajeDuplicado(message)) return;
 
-  const chatId = message.from;
-  let clienteId = message.author || message.from;
+  const chatId = normalizarWid(message.from);
+  if (!chatId || !esChatPrivado(chatId)) return;
+
+  let clienteId = normalizarWid(message.author) || chatId;
   if (clienteId.includes(':')) clienteId = clienteId.replace(/:\d+/, '');
 
   if (estaPausado(clienteId, clientesPausados)) {
@@ -753,9 +755,10 @@ function start(client) {
     // Pausar solo con !stop o handoff explícito ("hablar con asesor").
     if (message.fromMe) return;
 
-    if (!esChatPrivado(message.from)) return;
+    const from = normalizarWid(message.from);
+    if (!from || !esChatPrivado(from)) return;
 
-    let clienteId = message.author || message.from;
+    let clienteId = normalizarWid(message.author) || from;
     if (clienteId.includes(':')) clienteId = clienteId.replace(/:\d+/, '');
 
     encolar(clienteId, () => procesarMensajeEntrante(client, message));

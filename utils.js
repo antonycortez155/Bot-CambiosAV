@@ -103,7 +103,30 @@ function esMontoValido(monto, min = 1, max = 500000000) {
 }
 
 function esChatPrivado(chatId) {
-  return chatId && !chatId.endsWith('@g.us') && chatId !== 'status@broadcast';
+  const id = normalizarWid(chatId);
+  return id && !id.endsWith('@g.us') && id !== 'status@broadcast';
+}
+
+/**
+ * WhatsApp Web >= 2.3000.1042401057 renombró a veces _serialized → $1.
+ * Normaliza WIDs/MsgKey a string usable.
+ */
+function normalizarWid(valor) {
+  if (!valor) return null;
+  if (typeof valor === 'string') return valor;
+  if (typeof valor === 'object') {
+    const s = valor._serialized || valor.$1;
+    if (typeof s === 'string') return s;
+    if (typeof valor.toString === 'function') {
+      const t = valor.toString();
+      if (t && t !== '[object Object]') return t;
+    }
+  }
+  return null;
+}
+
+function serializarIdMensaje(message) {
+  return normalizarWid(message?.id) || null;
 }
 
 function validarBufferImagen(buffer) {
@@ -135,5 +158,7 @@ module.exports = {
   sanitizarBusqueda,
   esMontoValido,
   esChatPrivado,
+  normalizarWid,
+  serializarIdMensaje,
   validarBufferImagen,
 };
