@@ -71,6 +71,7 @@ const clientesPausados = {};
 const datosEnvio = {};
 const timersEncuesta = new Map();
 const SESSION_NAME = 'cambios-ayv-lite';
+const TOKENS_DIR = path.join(__dirname, 'tokens');
 const MAX_INTENTOS_ARRANQUE = 5;
 let clientGlobal = null;
 let reinicioEnCurso = false;
@@ -137,7 +138,7 @@ function matarChromeSesion(session = SESSION_NAME) {
 }
 
 function limpiarLocksSesion(session = SESSION_NAME) {
-  const dir = path.join(__dirname, 'tokens', session);
+  const dir = path.join(TOKENS_DIR, session);
   for (const nombre of [
     'lockfile',
     'SingletonLock',
@@ -309,7 +310,7 @@ async function iniciarBot() {
 
     const client = await wppconnect.create({
       session: SESSION_NAME,
-      folderNameToken: 'tokens',
+      folderNameToken: TOKENS_DIR,
       // HEADLESS=false en .env para ver Chrome y el QR en local
       headless: process.env.HEADLESS === 'false' ? false : true,
       autoClose: 0,
@@ -320,7 +321,8 @@ async function iniciarBot() {
       updatesLog: false,
       disableWelcome: true,
       waitForLogin: true,
-      // Dejar que WPPConnect elija la versión de WA Web compatible
+      // false = no fijar HTML local (evita "Version not available..." y carga WA Web actual)
+      whatsappVersion: false,
       catchQR: (base64Qr, asciiQR) => {
         console.log('[QR] Escanea el código QR con WhatsApp (Linked devices).');
         if (asciiQR) console.log(asciiQR);
@@ -575,6 +577,10 @@ async function procesarMensajeEntrante(client, message) {
   }
 
   if (texto === 'stop' || texto === 'alto') {
+    cancelarRecordatorio(clienteId);
+    limpiarFlujo(clienteId);
+    estadoCliente[clienteId] = null;
+    delete datosEnvio[clienteId];
     await marcarAtencionManual(supabase, clienteId, clientesPausados, PAUSA_USUARIO_MS);
     return client.sendText(
       chatId,
@@ -741,21 +747,29 @@ function start(client) {
   iniciarLimpiezaNocturna({ onLimpieza: limpiezaProfunda, sessionName: SESSION_NAME });
 
   client.onAnyMessage((message) => {
-    if (message.from === 'status@broadcast' || message.isBroadcast) return;
-    if (message.isGroupMsg) return;
+    try {
+      const fromRaw = normalizarWid(message.from) || message.from;
+      if (fromRaw === 'status@broadcast' || message.isBroadcast) return;
+      if (message.isGroupMsg) return;
 
-    // fromMe = mensajes salientes (bot o admin). No pausar automáticamente:
-    // WhatsApp a veces entrega el ack tarde y se confundía con intervención manual.
-    // Pausar solo con !stop o handoff explícito ("hablar con asesor").
-    if (message.fromMe) return;
+      // fromMe = mensajes salientes (bot o admin). No pausar automáticamente.
+      // Pausar solo con !stop o handoff explícito ("hablar con asesor").
+      if (message.fromMe) return;
 
-    const from = normalizarWid(message.from);
-    if (!from || !esChatPrivado(from)) return;
+      const from = normalizarWid(message.from);
+      if (!from || !esChatPrivado(from)) return;
 
-    let clienteId = normalizarWid(message.author) || from;
-    if (clienteId.includes(':')) clienteId = clienteId.replace(/:\d+/, '');
+      let clienteId = normalizarWid(message.author) || from;
+      if (clienteId.includes(':')) clienteId = clienteId.replace(/:\d+/, '');
 
-    encolar(clienteId, () => procesarMensajeEntrante(client, message));
+      encolar(clienteId, () =>
+        procesarMensajeEntrante(client, message).catch((err) => {
+          console.error('[MSG] Error procesando:', err.message);
+        })
+      );
+    } catch (err) {
+      console.error('[MSG] Error en listener:', err.message);
+    }
   });
 }
 

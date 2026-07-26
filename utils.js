@@ -116,7 +116,10 @@ function normalizarWid(valor) {
   if (typeof valor === 'string') return valor;
   if (typeof valor === 'object') {
     const s = valor._serialized || valor.$1;
-    if (typeof s === 'string') return s;
+    if (typeof s === 'string' && s) return s;
+    if (typeof valor.user === 'string' && typeof valor.server === 'string') {
+      return `${valor.user}@${valor.server}`;
+    }
     if (typeof valor.toString === 'function') {
       const t = valor.toString();
       if (t && t !== '[object Object]') return t;
@@ -126,7 +129,14 @@ function normalizarWid(valor) {
 }
 
 function serializarIdMensaje(message) {
-  return normalizarWid(message?.id) || null;
+  const id = message?.id;
+  const direct = normalizarWid(id);
+  if (direct) return direct;
+  if (id && typeof id === 'object' && id.remote != null && id.id != null) {
+    const remote = normalizarWid(id.remote) || String(id.remote);
+    return `${id.fromMe ? 'true' : 'false'}_${remote}_${id.id}`;
+  }
+  return null;
 }
 
 function validarBufferImagen(buffer) {
