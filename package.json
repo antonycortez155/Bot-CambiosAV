@@ -16,7 +16,7 @@
   "license": "ISC",
   "dependencies": {
     "@supabase/supabase-js": "^2.105.4",
-    "@wppconnect-team/wppconnect": "^2.2.2",
+    "@wppconnect-team/wppconnect": "^2.2.4",
     "dotenv": "^17.4.2",
     "node-cron": "^4.2.1"
   }

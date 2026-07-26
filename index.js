@@ -80,39 +80,27 @@ const mensajesProcesados = new Map();
 const TTL_MENSAJE_MS = 60000;
 const MAX_MENSAJES_CACHE = 250;
 
-/** Flags Chrome/Chromium agresivos para ~1 GB RAM (aplicar en browserArgs y puppeteer). */
+/** Flags Chrome/Chromium para ~1 GB RAM (sin romper WhatsApp Web). */
 const CHROME_LITE_ARGS = [
   '--no-sandbox',
   '--disable-setuid-sandbox',
   '--disable-dev-shm-usage',
-  '--disable-accelerated-2d-canvas',
   '--no-first-run',
   '--no-default-browser-check',
   '--disable-gpu',
-  '--disable-software-rasterizer',
   '--disable-extensions',
   '--disable-default-apps',
-  '--disable-background-networking',
   '--disable-sync',
-  '--disable-translate',
   '--mute-audio',
   '--disable-notifications',
   '--disable-popup-blocking',
-  '--disable-hang-monitor',
   '--disable-breakpad',
   '--disable-component-update',
-  '--disable-domain-reliability',
-  '--disable-client-side-phishing-detection',
-  '--disable-background-timer-throttling',
-  '--disable-renderer-backgrounding',
-  '--disable-backgrounding-occluded-windows',
-  '--disable-ipc-flooding-protection',
   '--metrics-recording-only',
-  '--renderer-process-limit=1',
-  '--disk-cache-size=1',
+  '--disk-cache-size=33554432',
   '--media-cache-size=1',
-  '--disable-features=TranslateUI,BlinkGenPropertyTrees,AudioServiceOutOfProcess,IsolateOrigins,site-per-process,CalculateNativeWinOcclusion,InterestFeedContentSuggestions',
-  '--js-flags=--max-old-space-size=192',
+  '--disable-features=TranslateUI,InterestFeedContentSuggestions',
+  '--js-flags=--max-old-space-size=256',
 ];
 
 function esMensajeDuplicado(message) {
@@ -322,7 +310,8 @@ async function iniciarBot() {
     const client = await wppconnect.create({
       session: SESSION_NAME,
       folderNameToken: 'tokens',
-      headless: true,
+      // HEADLESS=false en .env para ver Chrome y el QR en local
+      headless: process.env.HEADLESS === 'false' ? false : true,
       autoClose: 0,
       deviceSyncTimeout: 180000,
       useChrome: true,
@@ -331,11 +320,16 @@ async function iniciarBot() {
       updatesLog: false,
       disableWelcome: true,
       waitForLogin: true,
-      // false = no fijar versión local (evita "Version not available..." y usa WA Web actual)
-      whatsappVersion: false,
-      // Silencia spam debug de WPPConnect (onAnyMessage, etc.)
+      // Dejar que WPPConnect elija la versión de WA Web compatible
+      catchQR: (base64Qr, asciiQR) => {
+        console.log('[QR] Escanea el código QR con WhatsApp (Linked devices).');
+        if (asciiQR) console.log(asciiQR);
+      },
+      statusFind: (statusSession) => {
+        console.log('[SESIÓN]', statusSession);
+      },
       logger: winston.createLogger({
-        level: 'error',
+        level: 'warn',
         format: winston.format.combine(
           winston.format.colorize(),
           winston.format.printf(({ level, message }) => `${level}: ${message}`)
