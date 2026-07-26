@@ -111,19 +111,36 @@ async function ejecutarComando(client, message, contexto) {
     if (!contexto.esAdmin) return;
 
     if (texto === '!comandos') {
-        return client.sendText(chatId, 
-            `🛠 *PANEL DE CONTROL ADMIN* 🛠\n\n` +
+        return client.sendText(chatId,
+            `🛠 *PANEL DE CONTROL ADMIN*\n\n` +
+
             `💰 *OPERACIONES*\n` +
-            `• \`!resumen\` - Cierre de caja.\n` +
-            `• \`!pendientes\` - Envíos por procesar.\n` +
-            `• \`!comprobante [Nro]\` - Ver comprobante en revisión.\n` +
-            `• \`!ok [Nro Cliente]\` - Completar envío.\n\n` +
+            `• \`!pendientes\` — Envíos en revisión\n` +
+            `• \`!comprobante [Nro]\` — Ver/enlace del comprobante\n` +
+            `• \`!ok [Nro]\` — Marcar envío como completado\n` +
+            `• \`!cancelar [Nro]\` — Cancelar envío activo\n` +
+            `• \`!resumen\` — Cierre de caja del día\n` +
+            `• \`!stats\` / \`!stats mes\` — Estadísticas 7 o 30 días\n\n` +
+
+            `👤 *CLIENTES*\n` +
+            `• \`!buscar [nombre|tel]\` — Buscar cliente\n` +
+            `• \`!info [Nro]\` — Historial / VIP / calificación\n` +
+            `• \`!nombre [Nro] [Nombre]\` — Actualizar nombre\n` +
+            `• \`!reset [Nro]\` — Limpiar flujo y pausa\n` +
+            `• \`!stop [Nro]\` — Pausar bot 1 hora para ese chat\n` +
+            `• \`!start [Nro]\` — Reactivar bot para ese chat\n\n` +
+
             `⚙️ *CONFIGURACIÓN*\n` +
             `• \`!tasa [origen] [destino] [valor] [tipo]\`\n` +
-            `• \`!difusion [mensaje]\` - Mensaje masivo.\n\n` +
-            `👤 *CLIENTES*\n` +
-            `• \`!reset [Nro Cliente]\` - Limpiar estado.\n` +
-            `• \`!info [Nro Cliente]\` - Ver historial.`
+            `• \`!promo list\` — Promos activas\n` +
+            `• \`!promo off [id]\` — Desactivar promo\n` +
+            `• \`!promo crear nombre | % | mín | días [| origen | destino]\`\n` +
+            `• \`!difusion YYYY-MM-DD HH:MM | segmento | mensaje\`\n` +
+            `   _Segmentos: todos, vip, no_vip_\n\n` +
+
+            `🌐 *CONSULTA PÚBLICA*\n` +
+            `• \`!tasas\` — Tasas del día\n` +
+            `• \`!dolar\` / \`!bcv\` — Indicadores Venezuela`
         );
     }
 
